@@ -9,6 +9,8 @@ mengubah state**, walaupun user menyuruh.
 1. **Tanyakan folder plan.** Baca `meta` dan `verify.md` di sana.
 2. **Cek deterministik**, dari root repo project:
    `python3 "<skill-dir>/scripts/check_commits.py" "<folder-plan>"`
+   - `plan not ready (status=writing)` → plan belum selesai ditulis. Berhenti, jalankan alur
+     `resume` dulu (cek ulang step yang sudah ada), baru verify.
    - `repo mismatch` → berhenti, konfirmasi ke user repo mana yang dimaksud.
    - `base is not an ancestor` / `merge commit` → user merge/rebase di tengah run. Berhenti,
      jelaskan, minta user mengembalikan branch (beri command-nya) atau mulai plan baru.

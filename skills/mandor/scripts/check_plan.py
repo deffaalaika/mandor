@@ -63,6 +63,10 @@ def check_step(step_path: Path, tree: VirtualTree, rules: str, rep: mp.Report) -
         rep.add("FAIL", "more than %d files in FILES TO CHANGE (%d)" % (mp.MAX_FILES_PER_STEP,
                                                                          len(step.changes)), n)
     listed = [c.path for c in step.changes]
+    for p in sorted(set(listed + [r.path for r in step.reads] + [b.path for b in step.blocks])):
+        problem = mp.path_problem(p)
+        if problem:
+            rep.add("FAIL", problem, n)
     for p in set(listed):
         if listed.count(p) > 1:
             rep.add("FAIL", "file listed twice: %s" % p, n)

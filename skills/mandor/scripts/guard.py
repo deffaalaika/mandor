@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """PreToolUse hook for the mandor skill.
 
-Blocks Claude from (1) writing files inside the current project repo (Edit/Write tools and
-common Bash writes: redirects, tee, cp, mv, rm, touch, mkdir, sed -i, adb pull, Gradle
-format/auto-correct tasks) and (2) running git commands that change repository state.
+Blocks Claude from (1) writing files inside the project repo (Edit/Write tools and common Bash
+writes: redirects, tee, cp, mv, rm, touch, mkdir, sed -i, adb pull, Gradle format/auto-correct
+tasks) and (2) running git commands that change repository state. The project repo is the git repo
+of the session's cwd, plus any git repo that is a Gradle project (so starting Claude outside the
+repo does not switch the guard off). Commands inside `bash -c` / `sh -c` / `eval` are checked too.
 Read-only git is allowed. This is a safety net for a well-meaning Claude, not a sandbox.
 
 Reads the hook payload (JSON) from stdin. Exit 0 = allow, exit 2 = block (reason on stderr).
@@ -49,7 +51,10 @@ GIT_OPTS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "-
 WRAPPERS = {"sudo", "env", "command", "exec", "time", "nohup", "xargs", "nice", "timeout",
             "xcrun"}
 ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-SPLIT_RE = re.compile(r"&&|\|\||;|\||&|\n|`|\$\(|\(|\)")
+SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+SHELL_C_RE = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
+GRADLE_MARKERS = ("settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts")
+MAX_DEPTH = 5
 REDIRECT_RE = re.compile(r"^(\d*|&)?>>?(.*)$")
 FILE_WRITERS_ALL_ARGS = {"tee", "rm", "rmdir", "touch", "mkdir", "truncate", "mv", "unlink"}
 FILE_WRITERS_LAST_ARG = {"cp", "install", "ln", "rsync", "ditto"}
@@ -75,12 +80,29 @@ def repo_root(cwd: str) -> Optional[Path]:
     return Path(r.stdout.strip()).resolve()
 
 
-def inside(raw: str, cwd: str, root: Path) -> bool:
+def resolve(raw: str, cwd: str) -> Path:
     p = Path(os.path.expanduser(raw))
     if not p.is_absolute():
         p = Path(cwd) / p
-    p = p.resolve()
+    return p.resolve()
+
+
+def _inside(p: Path, root: Path) -> bool:
     return p == root or root in p.parents
+
+
+def protected_root(raw: str, cwd: str, cwd_root: Optional[Path]) -> Optional[Path]:
+    """The project repo `raw` lies in, if writing there must be blocked."""
+    p = resolve(raw, cwd)
+    if cwd_root is not None and _inside(p, cwd_root):
+        return cwd_root
+    d = p
+    while not d.is_dir() and d != d.parent:
+        d = d.parent
+    root = repo_root(str(d))
+    if root is not None and any((root / m).is_file() for m in GRADLE_MARKERS):
+        return root
+    return None
 
 
 def blocked_write(payload: dict) -> Optional[str]:
@@ -89,17 +111,96 @@ def blocked_write(payload: dict) -> Optional[str]:
     if not raw:
         return None
     cwd = payload.get("cwd") or os.getcwd()
-    root = repo_root(cwd)
-    if root is not None and inside(raw, cwd, root):
-        return MSG_WRITE % root
-    return None
+    root = protected_root(raw, cwd, repo_root(cwd))
+    return MSG_WRITE % root if root is not None else None
+
+
+def split_commands(cmd: str) -> List[str]:
+    """Split a command line on shell operators outside quotes. Command substitutions ($(...) and
+    backticks, also inside double quotes) and subshells become segments of their own."""
+    segs: List[str] = []
+    cur: List[str] = []
+    stack: List[str] = []  # open contexts: ' " $( ` (
+    i, n = 0, len(cmd)
+
+    def cut() -> None:
+        segs.append("".join(cur))
+        del cur[:]
+
+    while i < n:
+        c = cmd[i]
+        top = stack[-1] if stack else None
+        if top == "'":
+            cur.append(c)
+            if c == "'":
+                stack.pop()
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            cur.append(cmd[i:i + 2])
+            i += 2
+            continue
+        if cmd.startswith("$(", i):
+            cut()
+            stack.append("$(")
+            i += 2
+            continue
+        if c == "`":
+            cut()
+            if top == "`":
+                stack.pop()
+            else:
+                stack.append("`")
+            i += 1
+            continue
+        if top == '"':
+            cur.append(c)
+            if c == '"':
+                stack.pop()
+            i += 1
+            continue
+        if c in "'\"":
+            stack.append(c)
+            cur.append(c)
+        elif c == "(":
+            cut()
+            stack.append("(")
+        elif c == ")":
+            cut()
+            if top in ("$(", "("):
+                stack.pop()
+        elif cmd.startswith("&&", i) or cmd.startswith("||", i):
+            cut()
+            i += 1
+        elif c in ";|&\n":
+            cut()
+        else:
+            cur.append(c)
+        i += 1
+    cut()
+    return [seg for seg in segs if seg.strip()]
 
 
 def _tokens(segment: str) -> List[str]:
     try:
         return shlex.split(segment)
-    except ValueError:
-        return segment.split()
+    except ValueError:  # segment cut inside quotes by a substitution
+        return [t.strip("'\"") for t in segment.split()]
+
+
+def inner_script(tokens: List[str]) -> Optional[str]:
+    """The command string run by `bash -c <script>`, `sh -lc <script>` or `eval <args>`."""
+    cmd = _strip_wrappers(tokens)
+    if not cmd:
+        return None
+    name = os.path.basename(cmd[0])
+    if name == "eval":
+        return " ".join(cmd[1:])
+    if name in SHELLS:
+        for j in range(1, len(cmd) - 1):
+            if SHELL_C_RE.match(cmd[j]):
+                return cmd[j + 1]
+    return None
 
 
 def _strip_wrappers(tokens: List[str]) -> List[str]:
@@ -227,12 +328,15 @@ def strip_heredocs(cmd: str) -> str:
     return "\n".join(out)
 
 
-def blocked_bash(payload: dict) -> Optional[str]:
-    cmd = strip_heredocs((payload.get("tool_input") or {}).get("command") or "")
-    cwd = payload.get("cwd") or os.getcwd()
-    root = repo_root(cwd)
-    for segment in SPLIT_RE.split(cmd):
+def check_command(cmd: str, cwd: str, cwd_root: Optional[Path], depth: int = 0) -> Optional[str]:
+    for segment in split_commands(strip_heredocs(cmd)):
         tokens = _tokens(segment)
+        script = inner_script(tokens)
+        if script is not None and depth < MAX_DEPTH:
+            reason = check_command(script, cwd, cwd_root, depth + 1)
+            if reason:
+                return reason
+            continue
         sub = git_subcommand(tokens)
         if sub:
             reason = git_reason(sub)
@@ -242,11 +346,17 @@ def blocked_bash(payload: dict) -> Optional[str]:
         reason = gradle_reason(tokens)
         if reason:
             return reason
-        if root is not None:
-            for t in write_targets(tokens, cwd):
-                if inside(t, cwd, root):
-                    return MSG_WRITE % root
+        for t in write_targets(tokens, cwd):
+            root = protected_root(t, cwd, cwd_root)
+            if root is not None:
+                return MSG_WRITE % root
     return None
+
+
+def blocked_bash(payload: dict) -> Optional[str]:
+    cmd = (payload.get("tool_input") or {}).get("command") or ""
+    cwd = payload.get("cwd") or os.getcwd()
+    return check_command(cmd, cwd, repo_root(cwd))
 
 
 def is_blocked(payload: dict) -> Optional[str]:

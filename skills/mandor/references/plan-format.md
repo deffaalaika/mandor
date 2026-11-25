@@ -59,6 +59,9 @@ Nama file `step-<N>.md`, N mulai 1 tanpa lubang. Struktur persis:
 - <path>:<baris-awal>-<baris-akhir>
 (atau satu baris: - none)
 
+`<path>` = path relatif dari root repo persis seperti `git ls-files` menulisnya (`app/src/...`),
+tanpa `./`, `..`, `//`, `\`, atau path absolut. `check_plan.py` menolak bentuk lain.
+
 ## CHANGES
 FILE: <path>
 <<<<<<< SEARCH

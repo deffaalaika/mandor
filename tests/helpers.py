@@ -88,6 +88,7 @@ def make_repo(files: dict, parent=None) -> tuple:
     """Create a git repo with one commit. Returns (repo_path, sha)."""
     repo = Path(tempfile.mkdtemp(prefix="mandor-repo-", dir=parent)).resolve()
     git(repo, "init", "-q")
+    git(repo, "config", "core.autocrlf", "false")  # store bytes as written, whatever the host config
     write_files(repo, files)
     return repo, commit_all(repo, "base")
 
@@ -126,7 +127,7 @@ def execute_step(repo, step_file_text: str, mutate=None, msg="step") -> str:
         if c.action == "DELETE":
             target.unlink()
             continue
-        current = target.read_text(encoding="utf-8") if target.exists() else None
+        current = target.read_bytes().decode("utf-8") if target.exists() else None
         new, errs = mp.apply_blocks(current, [b for b in step.blocks if b.path == c.path])
         assert not errs, errs
         target.parent.mkdir(parents=True, exist_ok=True)

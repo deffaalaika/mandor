@@ -22,7 +22,11 @@ import mandor_plan as mp  # noqa: E402
 
 META_KEYS = ["repo", "base", "steps"]
 SUSPICIOUS_RE = re.compile(r"@Ignore|@Disabled|\bTODO\b|FIXME|NotImplementedError|!!")
-TEST_LINE_RE = re.compile(r"@Test|assert")
+# lines whose removal from a test file weakens it: JUnit/Truth/Hamcrest (assert*, fail), Kotest
+# (should*), MockK/Mockito (verify, coVerify, confirmVerified), Strikt (expectThat), Turbine (await*)
+TEST_LINE_RE = re.compile(
+    r"@Test|@ParameterizedTest|assert|\bfail\(|\bshould[A-Z]\w*|\b(co)?[vV]erify\w*\s*[({]"
+    r"|\bconfirmVerified\b|\bexpect\w*\(|\bawait(Item|Complete|Error)\b|\bexpectNoEvents\b")
 MAX_DIFF_LINES = 20
 EXPECTED_STATUS = {"CREATE": "A", "MODIFY": "M", "DELETE": "D"}
 
@@ -42,23 +46,28 @@ def toplevel(path: Path) -> Optional[Path]:
 def normalize(text: Optional[str]) -> str:
     if text is None:
         return ""
+    if text.startswith(mp.BOM):
+        text = text[len(mp.BOM):]
     lines = [ln.rstrip() for ln in text.replace("\r\n", "\n").split("\n")]
     return "\n".join(lines).rstrip("\n")
 
 
 def changed_files(repo: Path, sha: str) -> Dict[str, str]:
-    r = git(repo, "diff-tree", "-r", "--no-commit-id", "--name-status", "-M", sha)
+    # -z: raw paths (no quoting of non-ASCII names); records are STATUS\0path[\0newpath]\0
+    r = git(repo, "diff-tree", "-r", "-z", "--no-commit-id", "--name-status", "-M", sha)
+    fields = r.stdout.split("\0")
     out: Dict[str, str] = {}
-    for line in r.stdout.splitlines():
-        parts = line.split("\t")
-        if not parts or not parts[0]:
-            continue
-        status = parts[0][0]
-        if status == "R" and len(parts) == 3:
-            out[parts[1]] = "D"
-            out[parts[2]] = "A"
-        elif len(parts) >= 2:
-            out[parts[1]] = status
+    i = 0
+    while i < len(fields) and fields[i]:
+        status = fields[i][0]
+        if status in "RC" and i + 2 < len(fields):
+            if status == "R":
+                out[fields[i + 1]] = "D"
+            out[fields[i + 2]] = "A"
+            i += 3
+        else:
+            out[fields[i + 1]] = status
+            i += 2
     return out
 
 
@@ -161,6 +170,12 @@ def check_commits(plan_arg: str, repo_arg: str) -> int:
         return rep.finish()
     if meta_repo != repo:
         rep.add("FAIL", "repo mismatch: plan is for %s, checking %s" % (meta["repo"], repo))
+        return rep.finish()
+
+    status = meta.get("status", "")
+    if status != "ready":
+        rep.add("FAIL", "plan not ready (status=%s): finish it with /mandor resume first"
+                % (status or "missing"))
         return rep.finish()
 
     base = meta["base"]

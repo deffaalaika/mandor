@@ -37,7 +37,8 @@ lewat chat. Aturan ini meng-override CLAUDE.md global yang membolehkan Claude co
    Tulis command-nya untuk user. Git baca-saja (`status`, `log`, `diff`, `show`, `rev-parse`) boleh.
 3. **Tanyakan lokasi folder plan ke user setiap kali** (plan baru, `resume`, `question`, `verify`).
    Tidak ada default, jangan menebak dari sesi sebelumnya. Folder harus di luar repo project; kalau
-   user memberi path di dalam repo, tolak dan minta path lain.
+   user memberi path di dalam repo, tolak dan minta path lain. Folder di luar direktori kerja
+   bikin Claude Code minta izin tiap kali nulis: sarankan user ketik `/add-dir <folder-plan>` sekali.
 4. **Jangan menyarankan pesan commit.** Itu keputusan user.
 5. **Bukti > laporan.** Laporan junior ("done, tests pass") tidak dihitung.
 

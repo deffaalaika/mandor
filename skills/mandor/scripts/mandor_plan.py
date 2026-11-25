@@ -282,18 +282,39 @@ def parse_step(path: Path) -> Step:
     return step
 
 
+BOM = "﻿"
+
+
+def path_problem(path: str) -> Optional[str]:
+    """Plan paths must be plain repo-relative paths, exactly as git prints them."""
+    parts = path.split("/")
+    if path.startswith("/") or "\\" in path or "" in parts or "." in parts or ".." in parts:
+        return "path must be relative to the repo root, without ./ .. // or \\: %s" % path
+    return None
+
+
 def apply_blocks(content: Optional[str], blocks: List[Block]) -> Tuple[Optional[str], List[str]]:
+    """Apply blocks (written with LF) to a file, keeping the file's own CRLF line endings and BOM."""
     errors: List[str] = []
+    crlf = content is not None and "\r\n" in content
+    bom = content is not None and content.startswith(BOM)
+    work = content
+    if work is not None:
+        work = work[len(BOM):] if bom else work
+        work = work.replace("\r\n", "\n") if crlf else work
     for b in blocks:
         if b.kind == "FULL":
-            content = b.text
+            work = b.text
             continue
-        if content is None:
+        if work is None:
             errors.append("SEARCH block on missing file %s" % b.path)
             continue
-        count = content.count(b.search) if b.search else 0
+        count = work.count(b.search) if b.search else 0
         if count != 1:
             errors.append("SEARCH block not unique in %s (found %d)" % (b.path, count))
             continue
-        content = content.replace(b.search, b.text, 1)
-    return content, errors
+        work = work.replace(b.search, b.text, 1)
+    if work is not None:
+        work = work.replace("\n", "\r\n") if crlf else work
+        work = BOM + work if bom else work
+    return work, errors

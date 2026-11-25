@@ -85,6 +85,9 @@ didahulukan kalau terhubung).
 
 Folder plan juga berisi `README.md` dengan command `pbcopy` per step, siap tempel.
 
+Tips: folder plan ada di luar repo, jadi Claude Code minta izin tiap kali menulis ke sana. Ketik
+`/add-dir <folder-plan>` sekali di awal sesi supaya tidak ditanya berulang.
+
 ### Aturan selama satu run
 
 - Jangan merge/rebase dari main, jangan push, dan jangan commit hal lain sampai `/mandor verify`
@@ -98,6 +101,9 @@ Folder plan juga berisi `README.md` dengan command `pbcopy` per step, siap tempe
   Claude menulis file di repo project dan menjalankan git yang mengubah state (`commit`, `push`,
   `reset`, `checkout`, `rebase`, `merge`, `stash`, dst.). Git baca-saja (`status`, `log`, `diff`,
   `show`) tetap boleh.
+- Repo yang dilindungi: repo tempat Claude dijalankan, plus repo git mana pun yang berisi project
+  Gradle (`settings.gradle(.kts)`/`build.gradle(.kts)`), jadi tetap aman walau Claude dibuka dari
+  folder induk. Perintah di dalam `bash -c "..."`/`eval` ikut dicek.
 - Hook ini aktif **sampai sesi berakhir** (keluar, `/clear`, atau `/resume`). Mau Claude commit
   lagi untuk pekerjaan lain? Mulai sesi baru.
 - Cek hook terpasang: ketik `/hooks` setelah `/mandor`. Kalau tidak muncul, organisasi mungkin
@@ -119,6 +125,7 @@ Sebelum dipakai untuk task beneran, cek model lokalmu di laptop kantor:
    - [ ] Hanya file di `FILES TO CHANGE` yang berubah?
    - [ ] Tidak minta menjalankan terminal/Gradle (atau patuh saat ditolak)?
    - [ ] Kalau anchor sengaja dirusak, model berhenti dan menulis `QUESTION:`?
+   - [ ] Step `DELETE <file>` benar-benar menghapus file (bukan mengosongkan isinya)?
 4. Commit, lalu `/mandor verify`. Buang branch-nya setelah selesai.
 
 Kalau poin pertama gagal (model menulis ulang file utuh), pakai file yang lebih kecil per step;
